@@ -4,17 +4,31 @@ import { initialBoard, moves, applyMove } from "../lib/game";
 
 export const create = mutation({ args: { key: v.string() }, handler: async ({ db }, { key }) => {
   if (key.length < 30) throw new Error("Invalid player key");
-  return await db.insert("games", { board: initialBoard(), turn: 1, blackKey: key });
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const code = Array.from({ length: 7 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+    const existing = await db.query("games").withIndex("by_code", q => q.eq("code", code)).first();
+    if (!existing) return await db.insert("games", { code, board: initialBoard(), turn: 1, blackKey: key });
+  }
+  throw new Error("Could not create a game code. Please try again.");
 } });
 export const get = query({ args: { id: v.string() }, handler: async ({ db }, { id }) => {
   const gameId = db.normalizeId("games", id); const game = gameId ? await db.get(gameId) : null; if (!game) return null;
-  return { board: game.board, turn: game.turn, joined: !!game.whiteKey, last: game.last ?? null, forfeited: game.forfeited ?? null };
+  return { code: game.code ?? null, board: game.board, turn: game.turn, joined: !!game.whiteKey, last: game.last ?? null, forfeited: game.forfeited ?? null };
 } });
 export const join = mutation({ args: { id: v.string(), key: v.string() }, handler: async ({ db }, { id, key }) => {
   const gameId = db.normalizeId("games", id); const game = gameId ? await db.get(gameId) : null; if (!game) throw new Error("Game not found");
   if (key.length < 30 || key === game.blackKey) throw new Error("Invalid player key");
   if (game.whiteKey && game.whiteKey !== key) throw new Error("This game already has two players");
   if (!game.whiteKey) await db.patch(game._id, { whiteKey: key });
+} });
+export const joinByCode = mutation({ args: { code: v.string(), key: v.string() }, handler: async ({ db }, { code, key }) => {
+  const normalized = code.trim().toUpperCase();
+  if (!/^[A-HJ-NP-Z2-9]{7}$/.test(normalized) || key.length < 30) throw new Error("Invalid game code");
+  const game = await db.query("games").withIndex("by_code", q => q.eq("code", normalized)).first();
+  if (!game || game.whiteKey || game.forfeited || key === game.blackKey) throw new Error("Game not available");
+  await db.patch(game._id, { whiteKey: key });
+  return game._id;
 } });
 export const play = mutation({ args: { id: v.string(), key: v.string(), index: v.number() }, handler: async ({ db }, { id, key, index }) => {
   const gameId = db.normalizeId("games", id); const game = gameId ? await db.get(gameId) : null; if (!game) throw new Error("Game not found");
